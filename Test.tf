@@ -1,50 +1,57 @@
-resource "google_compute_project_metadata" "clvqa-project" {
-  metadata = {
-    enable-oslogin = "TRUE"               #CKV_GCP_33
+resource "aws_cloudtrail" "default" {
+  name                          = "tf-trail-foobar"
+  s3_bucket_name                = aws_s3_bucket.foo.id
+  s3_key_prefix                 = "prefix"
+  include_global_service_events = false
+  enable_logging                = true  # cid 24 Ensure aws_cloudtrail resource has attribute enable_logging set to true.
+  cloud_watch_logs_group_arn	= aws_cloudwatch_log_group.dada.arn
+  
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = true
+
+    data_resource {
+      type   = "AWS::Lambda::Function"
+      values = ["arn:aws:lambda"]
+    }
   }
 }
 
-resource "google_compute_instance" "pwqa-instance" {
-  name         = "clvqa-gcp-instance"
-  machine_type = "e2-medium"
-  zone         = "us-central1-a"
-  can_ip_forward = false                                 #CKV_GCP_36
-  boot_disk {
-    initialize_params {
-      image = "debian-cloud/debian-9"
-    }
-	disk_encryption_key_raw = "TestGcpEncrypt"            #CKV_GCP_38
-  }
-  /*access_config {
-        nap_ip = "10.0.42.42"                              #CKV_GCP_40
-   }*/
-  shielded_instance_config {
-		 enable_integrity_monitoring = true              #CKV_GCP_39
-         enable_vtpm = true                              #CKV_GCP_39
-		 
-  }
-  metadata = {
-	  serial-port-enable = false                        #CKV_GCP_35
-      block-project-ssh-keys = true                     #CKV_GCP_32
-	  enable-oslogin = true                             #CKV_GCP_34
-	 }
+resource "aws_cloudwatch_log_metric_filter" "unauth" {
+  name           = "unauthorized_api_calls_metric"
+  pattern        = "{{($.eventName = \"ConsoleLoginjs\") && ($.additionalEventData.MFAUsed != \"Yes\")}}"
+  log_group_name = aws_cloudwatch_log_group.dada.name
 
-  // Local SSD disk
-  scratch_disk {
-    interface = "SCSI"
+  metric_transformation {
+    name      = "unauthorized_api_calls_metric"
+    namespace = "CISBenchmark"
+    value     = "1"
   }
+}
 
-  network_interface {
-    network = "default"
-	access_config {
-      }
-   }
+resource "aws_cloudwatch_log_group" "dada" {
+  name = "MyApp/access.log"
+}
 
-  metadata_startup_script = "echo hi > /test.txt"
-  
-service_account {
-    # Google recommends custom service accounts that have cloud-platform scope and permissions granted via IAM Roles.
-	email  = "waykole.prashant@gmail.com"                               #CKV_GCP_30
-    scopes = ["	https://www.googleapis.com/auth/compute.readonly"]      #CKV_GCP_31 
-  }
+resource "aws_sns_topic" "trail-unauthorised" {
+  name="Unauthorised"
+  kms_master_key_id = "alias/aws/sns"
+}
+
+resource "aws_sns_topic_subscription" "sms" {
+  topic_arn = aws_sns_topic.trail-unauthorised.arn
+  protocol  = "sms"
+  endpoint	= var.endpoint
+}
+
+resource "aws_cloudwatch_metric_alarm" "unauth" {
+  alarm_name          = "unauthorized_api_calls_alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = aws_cloudwatch_log_metric_filter.unauth.metric_transformation.name
+  namespace           = "CISBenchmark"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  alarm_actions       = [aws_sns_topic.trail-unauthorised.arn]
 }
